@@ -1,0 +1,261 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>坦克大战小游戏</title>
+  <style>
+    body { margin:0; background:#1b1b1b; color:#eee; font-family: system-ui, sans-serif; display:flex; flex-direction:column; align-items:center; }
+    h1 { margin: 14px 0 8px; font-size: 24px; }
+    #game { background:#111; border:2px solid #4caf50; box-shadow: 0 0 20px rgba(76,175,80,.35); }
+    .panel { margin:10px 0 20px; display:flex; gap:16px; font-size:14px; flex-wrap:wrap; justify-content:center; }
+    .tip { color:#bbb; margin-bottom: 12px; }
+  </style>
+</head>
+<body>
+  <h1>坦克大战</h1>
+  <canvas id="game" width="800" height="560"></canvas>
+  <div class="panel">
+    <span>方向键移动</span>
+    <span>空格发射</span>
+    <span>R 重新开始</span>
+    <span id="score">分数：0</span>
+    <span id="hp">生命：3</span>
+  </div>
+  <div class="tip">击毁全部敌军获胜；生命归零则失败。</div>
+
+<script>
+(() => {
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  const scoreEl = document.getElementById('score');
+  const hpEl = document.getElementById('hp');
+
+  const W = canvas.width, H = canvas.height;
+  const CELL = 40;
+  const keys = new Set();
+
+  const DIR = {
+    up: {x:0,y:-1,a:-Math.PI/2},
+    down: {x:0,y:1,a:Math.PI/2},
+    left: {x:-1,y:0,a:Math.PI},
+    right: {x:1,y:0,a:0}
+  };
+
+  let player, enemies, bullets, enemyBullets, walls, gameOver, gameWin, score;
+
+  function init() {
+    player = { x: CELL*2, y: H-CELL*2, w:30, h:30, speed:2.4, dir:'up', hp:3, cd:0, alive:true };
+    enemies = [];
+    bullets = [];
+    enemyBullets = [];
+    walls = [];
+    gameOver = false;
+    gameWin = false;
+    score = 0;
+
+    // 砖墙
+    for (let r=3; r<11; r++) {
+      if (r===7) continue;
+      walls.push({x:CELL*7, y:r*CELL, w:CELL, h:CELL, hp:2});
+      walls.push({x:CELL*12, y:r*CELL, w:CELL, h:CELL, hp:2});
+    }
+    for (let c=4; c<16; c++) {
+      if (c===9 || c===10) continue;
+      walls.push({x:c*CELL, y:CELL*6, w:CELL, h:CELL, hp:2});
+    }
+
+    const starts = [1,5,9,13,17];
+    starts.forEach((g, i) => {
+      enemies.push({x:g*CELL, y:CELL, w:30, h:30, speed:1.3 + Math.random()*0.5, dir:'down', cd:50+i*12, turnCd:45, hp:1, alive:true});
+    });
+    updateHud();
+  }
+
+  function updateHud(){ scoreEl.textContent = `分数：${score}`; hpEl.textContent = `生命：${player.hp}`; }
+
+  function clamp(v,min,max){ return Math.max(min, Math.min(max, v)); }
+
+  function rectsOverlap(a,b){
+    return a.x < b.x+b.w && a.x+a.w > b.x && a.y < b.y+b.h && a.y+a.h > b.y;
+  }
+
+  function shoot(tank, arr, speed){
+    const d = DIR[tank.dir];
+    arr.push({
+      x: tank.x + tank.w/2 - 4,
+      y: tank.y + tank.h/2 - 4,
+      w: 8, h:8,
+      vx: d.x * speed,
+      vy: d.y * speed,
+      owner: tank===player ? 'player' : 'enemy'
+    });
+  }
+
+  function moveTank(t){
+    const d = DIR[t.dir];
+    let nx = t.x + d.x*t.speed;
+    let ny = t.y + d.y*t.speed;
+    const tmp = {...t, x:nx, y:ny};
+
+    nx = clamp(nx, 0, W - t.w);
+    ny = clamp(ny, 0, H - t.h);
+    tmp.x = nx; tmp.y = ny;
+
+    if (walls.some(w => w.hp>0 && rectsOverlap(tmp,w))) return;
+    if (t !== player && rectsOverlap(tmp, player)) return;
+    if (t === player && enemies.some(e => e.alive && rectsOverlap(tmp, e))) return;
+
+    t.x = nx; t.y = ny;
+  }
+
+  function updatePlayer(){
+    if (!player.alive || gameOver || gameWin) return;
+    if (keys.has('ArrowUp')) player.dir='up';
+    else if (keys.has('ArrowDown')) player.dir='down';
+    else if (keys.has('ArrowLeft')) player.dir='left';
+    else if (keys.has('ArrowRight')) player.dir='right';
+
+    if ([...keys].some(k => ['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(k))) moveTank(player);
+
+    player.cd = Math.max(0, player.cd-1);
+    if (keys.has(' ') && player.cd===0){
+      shoot(player, bullets, 5.2);
+      player.cd = 18;
+    }
+  }
+
+  function randomTurn(e){
+    const dirs = ['up','down','left','right'];
+    e.dir = dirs[Math.floor(Math.random()*4)];
+  }
+
+  function updateEnemies(){
+    enemies.forEach(e => {
+      if (!e.alive) return;
+      e.turnCd--;
+      if (e.turnCd<=0){ randomTurn(e); e.turnCd = 35 + Math.floor(Math.random()*45); }
+      moveTank(e);
+
+      if (Math.random()<0.01) randomTurn(e);
+      e.cd--;
+      if (e.cd<=0){
+        shoot(e, enemyBullets, 3.6);
+        e.cd = 45 + Math.floor(Math.random()*35);
+      }
+    });
+  }
+
+  function hitWall(b){
+    for (const w of walls){
+      if (w.hp>0 && rectsOverlap(b,w)){
+        w.hp--;
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function updateBullets(arr, isEnemy){
+    for (let i=arr.length-1; i>=0; i--){
+      const b = arr[i];
+      b.x += b.vx; b.y += b.vy;
+      if (b.x<0 || b.y<0 || b.x>W || b.y>H || hitWall(b)) { arr.splice(i,1); continue; }
+
+      if (!isEnemy){
+        let killed = false;
+        for (const e of enemies){
+          if (e.alive && rectsOverlap(b,e)){
+            e.hp--;
+            if (e.hp<=0){ e.alive = false; score += 100; updateHud(); }
+            arr.splice(i,1);
+            killed = true;
+            break;
+          }
+        }
+        if (killed) continue;
+      } else {
+        if (player.alive && rectsOverlap(b,player)){
+          player.hp--;
+          updateHud();
+          arr.splice(i,1);
+          if (player.hp<=0){ player.alive = false; gameOver = true; }
+          continue;
+        }
+      }
+    }
+  }
+
+  function drawTank(t, color){
+    if (!t.alive) return;
+    ctx.save();
+    ctx.translate(t.x+t.w/2, t.y+t.h/2);
+    ctx.rotate(DIR[t.dir].a);
+    ctx.fillStyle = color;
+    ctx.fillRect(-t.w/2, -t.h/2, t.w, t.h);
+    ctx.fillStyle = '#1a1a1a';
+    ctx.fillRect(-5, -6, 10, 12);
+    ctx.fillStyle = '#ddd';
+    ctx.fillRect(0, -3, t.w/2+8, 6);
+    ctx.restore();
+  }
+
+  function render(){
+    ctx.fillStyle = '#0f1f0f';
+    ctx.fillRect(0,0,W,H);
+
+    ctx.strokeStyle = 'rgba(255,255,255,.06)';
+    for (let x=0; x<=W; x+=CELL){ ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,H); ctx.stroke(); }
+    for (let y=0; y<=H; y+=CELL){ ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(W,y); ctx.stroke(); }
+
+    walls.forEach(w => {
+      if (w.hp<=0) return;
+      ctx.fillStyle = w.hp===2 ? '#8d6e63' : '#a1887f';
+      ctx.fillRect(w.x+2,w.y+2,w.w-4,w.h-4);
+    });
+
+    drawTank(player, '#4caf50');
+    enemies.forEach(e => drawTank(e, '#f44336'));
+
+    ctx.fillStyle = '#ffeb3b';
+    bullets.forEach(b => ctx.fillRect(b.x,b.y,b.w,b.h));
+    ctx.fillStyle = '#03a9f4';
+    enemyBullets.forEach(b => ctx.fillRect(b.x,b.y,b.w,b.h));
+
+    if (gameOver || gameWin){
+      ctx.fillStyle = 'rgba(0,0,0,.55)';
+      ctx.fillRect(0,0,W,H);
+      ctx.fillStyle = '#fff';
+      ctx.font = 'bold 46px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(gameOver ? '游戏结束' : '胜利！', W/2, H/2-10);
+      ctx.font = '22px sans-serif';
+      ctx.fillText('按 R 重新开始', W/2, H/2+36);
+    }
+  }
+
+  function loop(){
+    updatePlayer();
+    updateEnemies();
+    updateBullets(bullets, false);
+    updateBullets(enemyBullets, true);
+
+    if (!gameOver && enemies.every(e => !e.alive)) gameWin = true;
+    render();
+    requestAnimationFrame(loop);
+  }
+
+  window.addEventListener('keydown', (e) => {
+    if (e.code === 'Space') e.preventDefault();
+    keys.add(e.key === ' ' ? ' ' : e.code);
+    if (e.code === 'KeyR') init();
+  });
+
+  window.addEventListener('keyup', (e) => keys.delete(e.key === ' ' ? ' ' : e.code));
+
+  init();
+  loop();
+})();
+</script>
+</body>
+</html>
